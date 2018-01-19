@@ -1,6 +1,6 @@
 
 import cocotb
-from cocotb.triggers import RisingEdge, ReadOnly, ReadWrite, ClockCycles
+from cocotb.triggers import RisingEdge, FallingEdge, ReadOnly, ReadWrite, ClockCycles
 from cocotb.drivers import BusDriver
 from cocotb.binary import BinaryValue
 
@@ -155,12 +155,11 @@ class AXI4StreamSlave(BusDriver):
     @cocotb.coroutine
     def read(self):
         """Read a packet of data from the AXI4Stream bus"""
-
         # wait for valid
-        yield ReadOnly()
+        yield FallingEdge(self.clock)
         while not self.bus.tvalid.value:
             yield RisingEdge(self.clock)
-            yield ReadOnly()
+            yield FallingEdge(self.clock)
 
         meta = None
         # Wait for the pkt to finish
@@ -181,7 +180,8 @@ class AXI4StreamSlave(BusDriver):
             if self.bus.tvalid.value and self.bus.tlast.value:
                 break
             yield RisingEdge(self.clock)
-            yield ReadOnly()
+            yield FallingEdge(self.clock)
+
 
     @cocotb.coroutine
     def read_pkt(self):
