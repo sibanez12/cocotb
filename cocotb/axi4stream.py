@@ -169,9 +169,9 @@ class AXI4StreamSlave(BusDriver):
                 tdata = self.bus.tdata.value
                 tdata.big_endian = False
                 if meta is None and self.has_tuser:
-                    tuser = self.bus.tuser.value
-                    tuser.big_endian = False
-                    self.metadata.append(tuser)
+                    meta = self.bus.tuser.value
+                    meta.big_endian = False
+                    self.metadata.append(meta)
                 if self.has_tkeep:
                     tkeep = self.bus.tkeep.value.get_binstr()
                     num_bytes = tkeep.count('1')
