@@ -193,11 +193,19 @@ class AXI4StreamSlave(BusDriver):
         pkt_str = ''
         for data in self.data:
 #            data.big_endian = False
-            buff = data.get_buff()
             pkt_str += data.get_buff()
-        pkt = Ether(pkt_str)            
-        self.pkts.append(pkt)
+        try:
+            pkt = Ether(pkt_str)            
+            self.pkts.append(pkt)
+        except:
+            self.pkts.append(pkt_str)
 
+
+    @cocotb.coroutine
+    def read_n_pkts(self, n):
+        """Read n scapy pkts"""
+        for i in range(n):
+            yield self.read_pkt()
 
 
 
