@@ -182,7 +182,6 @@ class AXI4StreamSlave(BusDriver):
             yield RisingEdge(self.clock)
             yield FallingEdge(self.clock)
 
-
     @cocotb.coroutine
     def read_pkt(self):
         """Read a scapy pkt"""
@@ -208,4 +207,48 @@ class AXI4StreamSlave(BusDriver):
             yield self.read_pkt()
 
 
+class AXI4StreamStats(BusDriver):
+
+    _signals = ["tvalid", "tdata", "tlast"]
+    _optional_signals = ["tready", "tkeep", "tstrb", "tid", "tdest", "tuser"]
+
+
+    def __init__(self, entity, name, clock):
+        BusDriver.__init__(self, entity, name, clock)
+
+        self.has_tlast = 'tlast' in self.bus._signals.keys()
+        self.has_tready = 'tready' in self.bus._signals.keys()
+
+        self.delays = []
+
+    @cocotb.coroutine
+    def record_n_delays(self, n):
+        """Record the # clock cycles between the first word of n sequential pkts
+           on the AX4Stream bus"""
+
+        self.delays = []
+
+        # wait for the first word of the first pkt
+        yield FallingEdge(self.clock)
+        while not (self.bus.tvalid.value and self.bus.tready.value):
+            yield RisingEdge(self.clock)
+            yield FallingEdge(self.clock)
+
+        delay = 0
+        for i in range(n-1):
+            # wait for end of current packet
+            while not (self.bus.tvalid.value and self.bus.tready.value and self.bus.tlast.value):
+                yield RisingEdge(self.clock)
+                yield FallingEdge(self.clock)
+                delay += 1
+            yield RisingEdge(self.clock)
+            yield FallingEdge(self.clock)
+            delay += 1
+            # wait for start of next pkt
+            while not (self.bus.tvalid.value and self.bus.tready.value):
+                yield RisingEdge(self.clock)
+                yield FallingEdge(self.clock)
+                delay += 1
+            self.delays.append(delay)
+            delay = 0
 
