@@ -8,6 +8,8 @@ from scapy.all import Ether
 import logging
 logging.getLogger("scapy").setLevel(logging.ERROR)
 
+import random
+
 class AXI4StreamMaster(BusDriver):
     """
     Used to write a set of words onto an AXI4Stream interface
@@ -43,6 +45,7 @@ class AXI4StreamMaster(BusDriver):
         # For cases where there could be multiple masters on a bus, do not need for now ...
 #        self.write_data_busy = Lock("%s_wbusy" % name)
 
+
     @cocotb.coroutine
     def write(self, data, keep=[1], tid=0, dest=0, user=[0], delay = 0):
         """
@@ -59,8 +62,6 @@ class AXI4StreamMaster(BusDriver):
 
         if self.has_tkeep:
             self.bus.tkeep  <= keep[0]
-
-#        yield RisingEdge(self.clock)
 
         # every clock cycle update the data
         for i in range (len(data)):
@@ -96,6 +97,7 @@ class AXI4StreamMaster(BusDriver):
 
         # For cases where there could be multiple masters on a bus, do not need for now ...
 #        self.write_data_busy.release()
+
 
     @cocotb.coroutine
     def write_pkts(self, pkts, metadata):
@@ -139,32 +141,47 @@ class AXI4StreamSlave(BusDriver):
     _optional_signals = ["tready", "tkeep", "tstrb", "tid", "tdest", "tuser"]
 
 
-    def __init__(self, entity, name, clock):
+    def __init__(self, entity, name, clock, tready_delay=0):
         BusDriver.__init__(self, entity, name, clock)
 
+        self.tready_delay = tready_delay
         self.has_tkeep = 'tkeep' in self.bus._signals.keys()
         self.has_tuser = 'tuser' in self.bus._signals.keys()
         self.has_tready = 'tready' in self.bus._signals.keys()
         if self.has_tready:
-            self.bus.tready <= 1
+            self.bus.tready <= 0
 
         self.data = []
         self.pkts = []
         self.metadata = []
 
     @cocotb.coroutine
+    def drive_tready(self):
+        """Drive the tready bus 
+        """
+        while not self.pkt_finished:
+            self.bus.tready <= 1
+            yield FallingEdge(self.clock)            
+            if self.bus.tvalid.value:
+                yield RisingEdge(self.clock)
+                self.bus.tready <= 0
+                for i in range(self.tready_delay):
+                    yield RisingEdge(self.clock)
+#            yield RisingEdge(self.clock)
+        self.bus.tready <= 0
+
+    @cocotb.coroutine
     def read(self):
         """Read a packet of data from the AXI4Stream bus"""
-        # wait for valid
-        yield FallingEdge(self.clock)
-        while not self.bus.tvalid.value:
-            yield RisingEdge(self.clock)
-            yield FallingEdge(self.clock)
+
+        self.pkt_finished = False
+        tready_thread = cocotb.fork(self.drive_tready())
 
         meta = None
         # Wait for the pkt to finish
         while True:
-            if self.bus.tvalid.value:
+            yield FallingEdge(self.clock)
+            if self.bus.tvalid.value and self.bus.tready.value:
                 tdata = self.bus.tdata.value
                 tdata.big_endian = False
                 if meta is None and self.has_tuser:
@@ -177,10 +194,15 @@ class AXI4StreamSlave(BusDriver):
                     self.data.append(tdata[num_bytes*8-1 : 0])
                 else:
                     self.data.append(tdata)
-            if self.bus.tvalid.value and self.bus.tlast.value:
+            if self.bus.tvalid.value and self.bus.tlast.value and self.bus.tready.value:
                 break
+                
             yield RisingEdge(self.clock)
-            yield FallingEdge(self.clock)
+
+        self.pkt_finished = True
+        yield tready_thread.join()
+
+
 
     @cocotb.coroutine
     def read_pkt(self):
@@ -219,7 +241,32 @@ class AXI4StreamStats(BusDriver):
         self.has_tlast = 'tlast' in self.bus._signals.keys()
         self.has_tready = 'tready' in self.bus._signals.keys()
 
+        self.times = []
         self.delays = []
+
+    @cocotb.coroutine
+    def record_n_start_times(self, n, counter):
+        """Record the start times of n pkts using the provided counter
+        """
+        self.times = []
+
+        for i in range(n):
+            # wait for the first word of the pkt
+            yield FallingEdge(self.clock)
+            while not (self.bus.tvalid.value and self.bus.tready.value):
+                yield RisingEdge(self.clock)
+                yield FallingEdge(self.clock)
+
+            # record the current cycle count
+            self.times.append(counter.cnt)
+
+            # wait for end of current packet
+            while not (self.bus.tvalid.value and self.bus.tready.value and self.bus.tlast.value):
+                yield RisingEdge(self.clock)
+                yield FallingEdge(self.clock)
+
+            yield RisingEdge(self.clock)
+
 
     @cocotb.coroutine
     def record_n_delays(self, n):
@@ -251,4 +298,20 @@ class AXI4StreamStats(BusDriver):
                 delay += 1
             self.delays.append(delay)
             delay = 0
+
+
+class CycleCounter(object):
+    """
+    Simple counter to count clock cycles
+    """
+    def __init__(self, clock):
+        self.clock = clock
+        self.cnt = 0
+        self.finish = False
+
+    @cocotb.coroutine
+    def start(self):
+        while not self.finish:
+            yield FallingEdge(self.clock)
+            self.cnt += 1
 
