@@ -1,6 +1,6 @@
 
 import cocotb
-from cocotb.triggers import RisingEdge, FallingEdge, ReadOnly, ReadWrite, ClockCycles
+from cocotb.triggers import RisingEdge, FallingEdge, ReadOnly, ReadWrite, ClockCycles, Timer
 from cocotb.drivers import BusDriver
 from cocotb.binary import BinaryValue
 
@@ -141,10 +141,11 @@ class AXI4StreamSlave(BusDriver):
     _optional_signals = ["tready", "tkeep", "tstrb", "tid", "tdest", "tuser"]
 
 
-    def __init__(self, entity, name, clock, tready_delay=0):
+    def __init__(self, entity, name, clock, tready_delay=0, idle_timeout=5000*1000):
         BusDriver.__init__(self, entity, name, clock)
 
         self.tready_delay = tready_delay
+        self.idle_timeout = idle_timeout
         self.has_tkeep = 'tkeep' in self.bus._signals.keys()
         self.has_tuser = 'tuser' in self.bus._signals.keys()
         self.has_tready = 'tready' in self.bus._signals.keys()
@@ -226,7 +227,14 @@ class AXI4StreamSlave(BusDriver):
     def read_n_pkts(self, n):
         """Read n scapy pkts"""
         for i in range(n):
-            yield self.read_pkt()
+            tout_trigger = Timer(self.idle_timeout)
+            pkt_trigger = cocotb.fork(self.read_pkt())
+            result = yield [tout_trigger, pkt_trigger.join()]
+            if result == tout_trigger:
+                print 'ERROR: AXI4StreamSlave encountered a timeout at pkt {} out of {}'.format(i, n)
+                break
+            else:
+                print 'pkt_slave received pkt {}'.format(i)
 
 
 class AXI4StreamStats(BusDriver):
@@ -235,9 +243,10 @@ class AXI4StreamStats(BusDriver):
     _optional_signals = ["tready", "tkeep", "tstrb", "tid", "tdest", "tuser"]
 
 
-    def __init__(self, entity, name, clock):
+    def __init__(self, entity, name, clock, idle_timeout=5000*1000):
         BusDriver.__init__(self, entity, name, clock)
 
+        self.idle_timeout = idle_timeout
         self.has_tlast = 'tlast' in self.bus._signals.keys()
         self.has_tready = 'tready' in self.bus._signals.keys()
 
@@ -251,21 +260,30 @@ class AXI4StreamStats(BusDriver):
         self.times = []
 
         for i in range(n):
-            # wait for the first word of the pkt
-            yield FallingEdge(self.clock)
-            while not (self.bus.tvalid.value and self.bus.tready.value):
-                yield RisingEdge(self.clock)
-                yield FallingEdge(self.clock)
+            tout_trigger = Timer(self.idle_timeout)
+            stat_trigger = cocotb.fork(self.record_start_time(counter))
+            result = yield [tout_trigger, stat_trigger.join()]
+            if result == tout_trigger:
+                print 'ERROR: AXI4StreamStats encountered a timeout at pkt {} out of {}'.format(i, n)
+                break
 
-            # record the current cycle count
-            self.times.append(counter.cnt)
-
-            # wait for end of current packet
-            while not (self.bus.tvalid.value and self.bus.tready.value and self.bus.tlast.value):
-                yield RisingEdge(self.clock)
-                yield FallingEdge(self.clock)
-
+    @cocotb.coroutine
+    def record_start_time(self, counter):
+        # wait for the first word of the pkt
+        yield FallingEdge(self.clock)
+        while not (self.bus.tvalid.value and self.bus.tready.value):
             yield RisingEdge(self.clock)
+            yield FallingEdge(self.clock)
+
+        # record the current cycle count
+        self.times.append(counter.cnt)
+
+        # wait for end of current packet
+        while not (self.bus.tvalid.value and self.bus.tready.value and self.bus.tlast.value):
+            yield RisingEdge(self.clock)
+            yield FallingEdge(self.clock)
+
+        yield RisingEdge(self.clock)
 
 
     @cocotb.coroutine
