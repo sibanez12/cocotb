@@ -9,6 +9,7 @@ import logging
 logging.getLogger("scapy").setLevel(logging.ERROR)
 
 import random
+import progressbar
 
 class AXI4StreamMaster(BusDriver):
     """
@@ -226,6 +227,11 @@ class AXI4StreamSlave(BusDriver):
     @cocotb.coroutine
     def read_n_pkts(self, n):
         """Read n scapy pkts"""
+        bar = progressbar.ProgressBar(maxval=n, \
+                 widgets=[progressbar.Bar('=', '[', ']'), ' ', progressbar.Percentage()])
+
+        print 'AXI4StreamSlave receiving pkts:'
+        bar.start()
         for i in range(n):
             tout_trigger = Timer(self.idle_timeout)
             pkt_trigger = cocotb.fork(self.read_pkt())
@@ -234,8 +240,8 @@ class AXI4StreamSlave(BusDriver):
                 print 'ERROR: AXI4StreamSlave encountered a timeout at pkt {} out of {}'.format(i, n)
                 break
             else:
-                print 'pkt_slave received pkt {}'.format(i)
-
+                bar.update(i+1)
+        bar.finish()
 
 class AXI4StreamStats(BusDriver):
 
