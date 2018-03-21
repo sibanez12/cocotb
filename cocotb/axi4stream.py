@@ -153,6 +153,8 @@ class AXI4StreamSlave(BusDriver):
         if self.has_tready:
             self.bus.tready <= 0
 
+        self.error = False
+
         self.data = []
         self.pkts = []
         self.metadata = []
@@ -193,7 +195,8 @@ class AXI4StreamSlave(BusDriver):
                 if self.has_tkeep:
                     tkeep = self.bus.tkeep.value.get_binstr()
                     num_bytes = tkeep.count('1')
-                    self.data.append(tdata[num_bytes*8-1 : 0])
+                    if num_bytes > 0:
+                        self.data.append(tdata[num_bytes*8-1 : 0])
                 else:
                     self.data.append(tdata)
             if self.bus.tvalid.value and self.bus.tlast.value and self.bus.tready.value:
@@ -238,6 +241,7 @@ class AXI4StreamSlave(BusDriver):
             result = yield [tout_trigger, pkt_trigger.join()]
             if result == tout_trigger:
                 print 'ERROR: AXI4StreamSlave encountered a timeout at pkt {} out of {}'.format(i, n)
+                self.error = True
                 break
             else:
                 bar.update(i+1)
