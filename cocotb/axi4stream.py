@@ -101,9 +101,10 @@ class AXI4StreamMaster(BusDriver):
 
 
     @cocotb.coroutine
-    def write_pkts(self, pkts, metadata):
+    def write_pkts(self, pkts, metadata, rate=None):
         """
         Write a list of scapy pkts onto the AXI4Stream bus
+        rate: specified in bytes/cycle
         """
         for (pkt, meta) in zip(pkts, metadata):
             pkt_str = str(pkt)
@@ -133,7 +134,9 @@ class AXI4StreamMaster(BusDriver):
             # send the pkt
             yield self.write(pkt_words, keep=pkt_keeps, user=pkt_users)
             # wait a cycle
-            yield RisingEdge(self.clock)
+            delay = int(len(pkt)/float(rate) - len(pkt)/float(self.data_width)) if rate is not None else 1
+            for i in range(delay):
+                yield RisingEdge(self.clock)
 
 
 class AXI4StreamSlave(BusDriver):
@@ -259,15 +262,18 @@ class AXI4StreamStats(BusDriver):
         self.idle_timeout = idle_timeout
         self.has_tlast = 'tlast' in self.bus._signals.keys()
         self.has_tready = 'tready' in self.bus._signals.keys()
+        self.has_tuser = 'tuser' in self.bus._signals.keys()
 
         self.times = []
         self.delays = []
+        self.metadata = []
 
     @cocotb.coroutine
     def record_n_start_times(self, n, counter):
         """Record the start times of n pkts using the provided counter
         """
         self.times = []
+        self.metadata = []
 
         for i in range(n):
             tout_trigger = Timer(self.idle_timeout)
@@ -287,6 +293,10 @@ class AXI4StreamStats(BusDriver):
 
         # record the current cycle count
         self.times.append(counter.cnt)
+        if self.has_tuser:
+            meta = self.bus.tuser.value
+            meta.big_endian = False
+            self.metadata.append(meta)
 
         # wait for end of current packet
         while not (self.bus.tvalid.value and self.bus.tready.value and self.bus.tlast.value):
