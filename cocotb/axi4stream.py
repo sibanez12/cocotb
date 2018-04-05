@@ -19,11 +19,12 @@ class AXI4StreamMaster(BusDriver):
     _signals = ["tvalid", "tdata", "tlast"]  # Write data channel
     _optional_signals = ["tready", "tkeep", "tstrb", "tid", "tdest", "tuser"]
 
-    def __init__(self, entity, name, clock):
+    def __init__(self, entity, name, clock, idle_timeout=5000*1000):
         BusDriver.__init__(self, entity, name, clock)
 
-        self.data_width = len(self.bus.tdata) # bits
+        self.idle_timeout = idle_timeout
 
+        self.data_width = len(self.bus.tdata) # bits
         self.data_width_bytes = self.data_width / 8
 
         # Drive default values onto bus
@@ -42,6 +43,9 @@ class AXI4StreamMaster(BusDriver):
         if self.has_tuser:
             self.user_width = len(self.bus.tuser) # bits
             self.bus.tuser.setimmediatevalue(BinaryValue(value = 0x0, bits = self.user_width, bigEndian = False))
+
+        self.pkt_cnt = 0
+        self.error = False
 
         # For cases where there could be multiple masters on a bus, do not need for now ...
 #        self.write_data_busy = Lock("%s_wbusy" % name)
@@ -132,7 +136,15 @@ class AXI4StreamMaster(BusDriver):
             # build tuser
             pkt_users = [meta] + [0]*(len(pkt_words)-1)
             # send the pkt
-            yield self.write(pkt_words, keep=pkt_keeps, user=pkt_users)
+            tout_trigger = Timer(self.idle_timeout)
+            pkt_trigger = cocotb.fork(self.write(pkt_words, keep=pkt_keeps, user=pkt_users))
+            result = yield [tout_trigger, pkt_trigger.join()]
+            if result == tout_trigger:
+                print 'ERROR: AXI4StreamMaster encountered a timeout at pkt {}'.format(self.pkt_cnt)
+                self.error = True
+                break
+            self.pkt_cnt += 1
+
             # wait a cycle
             delay = int(len(pkt)/float(rate) - len(pkt)/float(self.data_width)) if rate is not None else 1
             for i in range(delay):
@@ -266,6 +278,7 @@ class AXI4StreamStats(BusDriver):
 
         self.times = []
         self.delays = []
+        self.enq_delays = []
         self.metadata = []
 
     @cocotb.coroutine
@@ -337,6 +350,52 @@ class AXI4StreamStats(BusDriver):
             self.delays.append(delay)
             delay = 0
 
+
+    @cocotb.coroutine
+    def record_n_enq_delays(self, n):
+        """Record the # clock cycles between tvalid asserted and the first word of the packet"""
+
+        self.enq_delays = []
+
+        for i in range(n):
+            # wait for tvalid to be asserted
+            yield FallingEdge(self.clock)
+            while not self.bus.tvalid.value:
+                yield RisingEdge(self.clock)
+                yield FallingEdge(self.clock)
+    
+            delay = 0
+            # wait for the end of the current packet
+            while not (self.bus.tvalid.value and self.bus.tready.value and self.bus.tlast.value):
+                yield RisingEdge(self.clock)
+                yield FallingEdge(self.clock)
+                delay += 1
+            self.enq_delays.append(delay)
+
+            yield RisingEdge(self.clock)
+
+    @cocotb.coroutine
+    def record_n_deq_delays(self, n):
+        """Record the # clock cycles between tready asserted and the first word of the packet """
+
+        self.deq_delays = []
+
+        for i in range(n):
+            # wait for tready to be asserted
+            yield FallingEdge(self.clock)
+            while not self.bus.tready.value:
+                yield RisingEdge(self.clock)
+                yield FallingEdge(self.clock)
+    
+            delay = 0
+            # wait for the end of the current packet
+            while not (self.bus.tvalid.value and self.bus.tready.value and self.bus.tlast.value):
+                yield RisingEdge(self.clock)
+                yield FallingEdge(self.clock)
+                delay += 1
+            self.deq_delays.append(delay)
+
+            yield RisingEdge(self.clock)
 
 class CycleCounter(object):
     """
