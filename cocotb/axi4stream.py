@@ -58,6 +58,10 @@ class AXI4StreamMaster(BusDriver):
         """
         # For cases where there could be multiple masters on a bus, do not need for now ...
 #        yield self.write_data_busy.acquire()
+
+        yield FallingEdge(self.clock)
+        yield RisingEdge(self.clock)
+
         self.bus.tvalid <=  0
         self.bus.tdata  <=  data[0]
         self.bus.tlast  <=  0
@@ -83,18 +87,27 @@ class AXI4StreamMaster(BusDriver):
             if i >= len(data) - 1:
                 self.bus.tlast  <=  1;
 
-            yield ReadOnly()
+#            yield ReadOnly()
+            yield FallingEdge(self.clock)
 
             # do not transition to next word until tready is asserted
-            if self.has_tready and not self.bus.tready.value:
-                while True:
-                    yield RisingEdge(self.clock)
-                    yield ReadOnly()
-                    if self.bus.tready.value:
-                        yield RisingEdge(self.clock)
-                        break
-                continue
+            while self.has_tready and not self.bus.tready.value:
+                yield RisingEdge(self.clock)
+                yield FallingEdge(self.clock)
             yield RisingEdge(self.clock)
+
+#            # do not transition to next word until tready is asserted
+#            if self.has_tready and not self.bus.tready.value:
+#                while True:
+#                    yield RisingEdge(self.clock)
+##                    yield ReadOnly()
+#                    yield FallingEdge(self.clock)
+#                    print "self.bus.tready.value = {}".format(self.bus.tready.value)
+#                    if self.bus.tready.value:
+#                        yield RisingEdge(self.clock)
+#                        break
+##                continue
+#            yield RisingEdge(self.clock)
 
         self.bus.tlast  <=  0;
         self.bus.tvalid <=  0;
@@ -225,7 +238,7 @@ class AXI4StreamSlave(BusDriver):
 
 
     @cocotb.coroutine
-    def read_pkt(self):
+    def read_pkt(self, log_raw=False):
         """Read a scapy pkt"""
 
         self.data = []
@@ -235,15 +248,19 @@ class AXI4StreamSlave(BusDriver):
         for data in self.data:
 #            data.big_endian = False
             pkt_str += data.get_buff()
-        try:
-            pkt = Ether(pkt_str)            
-            self.pkts.append(pkt)
-        except:
+
+        if log_raw:
             self.pkts.append(pkt_str)
+        else:
+            try:
+                pkt = Ether(pkt_str)
+                self.pkts.append(pkt)
+            except:
+                self.pkts.append(pkt_str)
 
 
     @cocotb.coroutine
-    def read_n_pkts(self, n):
+    def read_n_pkts(self, n, log_raw=False):
         """Read n scapy pkts"""
         bar = progressbar.ProgressBar(maxval=n, \
                  widgets=[progressbar.Bar('=', '[', ']'), ' ', progressbar.Percentage()])
@@ -252,7 +269,7 @@ class AXI4StreamSlave(BusDriver):
         bar.start()
         for i in range(n):
             tout_trigger = Timer(self.idle_timeout)
-            pkt_trigger = cocotb.fork(self.read_pkt())
+            pkt_trigger = cocotb.fork(self.read_pkt(log_raw))
             result = yield [tout_trigger, pkt_trigger.join()]
             if result == tout_trigger:
                 print 'ERROR: AXI4StreamSlave encountered a timeout at pkt {} out of {}'.format(i, n)
